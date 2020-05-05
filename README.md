@@ -20,5 +20,6 @@ What is the effect of the social distancing / shelter in place / lockdown recomm
 How can we quantify the potential effects on nutrition and general health of the public, outside of those affected by the virus?
 How are refugees affected by COVID-19?
 This challenge involves finding your own dataset, but a few pointers might be helpful to get a sense of what type of datasets might work. We list a few options below, but once again, you are highly encouraged to work with datasets different from these.
+
 Google Trends: https://trends.google.com/
 Lots of data sources listed at https://github.com/mine-cetinkaya-rundel/covid19-r#data
