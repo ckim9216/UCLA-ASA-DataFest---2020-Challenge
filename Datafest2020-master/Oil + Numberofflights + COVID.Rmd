@@ -1,0 +1,98 @@
+---
+title: "Oil & Number of flights & COVIDconfirmed"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(lubridate)
+library(hrbrthemes)
+```
+
+Plot showing corrleation between oil price, # of flights and # of confirmed COVID patients
+```{r}
+number_of_flights <-read.csv("C:/Users/codud/Desktop/CL/DATAFEST/total-number-of-flights.csv", 
+                             fileEncoding="UTF-8-BOM",
+                              check.names=FALSE)
+
+oil_price <- read.csv("C:/Users/codud/Desktop/CL/DATAFEST/wti-crude-oil-prices-10-year-daily-chart.csv")
+oil_price <- oil_price[2435:2518,]
+
+corona <- read.csv("C:/Users/codud/Desktop/CL/DATAFEST/covid_US.txt")
+corona_bydate <- corona %>% 
+  group_by(date) %>% 
+  summarise(confirmed = sum(confirmed), deaths = sum(deaths))
+
+number_of_flights$`Number of flights` <- scale(number_of_flights$`Number of flights`)
+number_of_flights <- number_of_flights %>%
+  select(Date, `Number of flights`)
+number_of_flights$Date <- as.Date(number_of_flights$Date)
+number_of_flights <- cbind(number_of_flights, as.data.frame(rep("Numberofflights", 90)))
+colnames(number_of_flights) <- c("Date", "Value", "Name")
+
+oil_price$value <- scale(oil_price$value)
+oil_price$date <- as.Date(oil_price$date)
+oil_price <- cbind(oil_price, as.data.frame(rep("OilPrice", 84)))
+colnames(oil_price) <- c("Date", "Value", "Name")
+
+corona_bydate$confirmed <- scale(corona_bydate$confirmed)
+corona_bydate <- corona_bydate %>% 
+  select("date","confirmed")
+corona_bydate$date <- as.Date(corona_bydate$date, format = "%m-%d")
+corona_bydate <- cbind(corona_bydate, as.data.frame(rep("ConfirmedCovid", 104)))
+colnames(corona_bydate) <- c("Date", "Value", "Name")
+
+Alldata <- rbind(number_of_flights, oil_price)
+Alldata <- rbind(Alldata, corona_bydate)
+
+ggplot(Alldata, aes(x=Date, y=Value, color=Name)) +
+  geom_point(size=3) +
+  theme_classic()
+```
+
+Percent change in oil price, # of flights and # of confirmed COVID patients by month
+```{r}
+number_of_flights <-read.csv("C:/Users/codud/Desktop/CL/DATAFEST/total-number-of-flights.csv", 
+                              fileEncoding="UTF-8-BOM",
+                              check.names=FALSE)
+
+oil_price <- read.csv("C:/Users/codud/Desktop/CL/DATAFEST/wti-crude-oil-prices-10-year-daily-chart.csv")
+oil_price <- oil_price[2435:2518,]
+
+corona_bydate <- read.csv("C:/Users/codud/Desktop/CL/DATAFEST/covid_US.txt")
+
+corona_bydate$date <- as.Date(corona_bydate$date, format = "%m-%d")
+corona_bydate <- corona_bydate %>% 
+  group_by(date=floor_date(date, "month")) %>% 
+  summarise(confirmed = mean(confirmed), deaths = mean(deaths)) %>% 
+  mutate(newconfirm = (confirmed-lag(confirmed)))
+corona_bydate
+
+number_of_flights$Date <- as.Date(number_of_flights$Date)
+number_of_flights <- number_of_flights %>% 
+  group_by(Date=floor_date(Date, "month")) %>% 
+  summarise(Number = mean(`Number of flights`)) %>% 
+  mutate(pct_change = (Number/lag(Number) - 1) * 100)
+number_of_flights
+
+oil_price$date <- as.Date(oil_price$date)
+oil_price <- oil_price %>% 
+  group_by(date=floor_date(date, "month")) %>% 
+  summarise(Number = mean(value)) %>% 
+  mutate(pct_change = (Number/lag(Number) - 1) * 100)
+oil_price
+```
+
+Analysis? ?
+In April 2020, the number of US flights reduced by 49.8%.
+In May 2020, the number of US flights increased by 7.36%.
+
+In April 2020, the oil price reduced by 35.5%.
+In May 2020, the oil price increased by 2.11%.
+
+Corona has been worsening in May, but flights and oil prices have been on the rise. People's mobility is increasing as of late April. People who usually follow stay at home order get tired and stuffy ftera month and a half, protests are taking place, and restaurants and shopping malls are opening up little by little. So if we're not limiting our topic to the economy, it's going to be fun to think about how people's minds change along with its correlation with mobilty.
+
+If we were to talk about airline industry or any other industry, we eventually want to talk about what industries Corona affects, and how much of that affects the international economy...
+
+So even if we decide to focus on airlines, we're going to expand our areas of interest to airports, freight, tourism, etc.

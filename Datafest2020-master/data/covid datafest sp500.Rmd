@@ -1,0 +1,618 @@
+---
+title: "COVID datafest"
+author: "Park"
+date: "5/4/2020"
+output: pdf_document
+---
+
+```{r}
+# for scraping
+library(rvest)
+# blanket import for core tidyverse packages
+library(tidyverse)
+# tidy financial analysis 
+library(tidyquant)
+# tidy data cleaning functions
+library(janitor)
+
+library(ggplot2)
+library(readxl)
+
+library(dplyr)
+library(readxl)
+library(tseries)
+```
+
+```{r}
+# save current system date to a variable
+today <- Sys.Date()
+# subtract 3 months from the current date
+date = today %m+% months(-5)
+print(date)
+
+# pass SP500 ticker ^GSPC to tq_get function
+one_ticker = tq_get("^GSPC", from = date)
+one_ticker %>% head()
+
+# save mobility data
+mobility <- read.csv("https://www.gstatic.com/covid19/mobility/Global_Mobility_Report.csv?cachebust=a88b56a24e1a1e25", stringsAsFactors=FALSE, fileEncoding="latin1")
+
+#write.csv(mobility,"mobility.csv")
+
+co <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/CO_ca.csv", header = TRUE)
+co$Date <- as.Date(co$Date, "%m/%d/%Y")
+
+ozone <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/Ozone_ca.csv", header = TRUE)
+ozone2 <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/ozone2019.csv", header = TRUE)
+ozone3 <- rbind(ozone2, ozone)
+ozone3$Date <- as.Date(ozone3$Date, "%m/%d/%Y")
+
+
+
+pm25 <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/PM25_ca.csv", header = TRUE)
+pm25_19 <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/pm25_2019.csv", header = TRUE)
+pm25_total <- rbind(pm25_19, pm25)
+pm25_total$Date <- as.Date(pm25_total$Date, "%m/%d/%Y")
+
+# get Quarterly Report
+air_revenue_quarterly <- read_excel("~/Dropbox/School/UCLA/Datafest 2020/Airline data/airline_revenue_quarterly.xlsx")
+air_revenue_quarterly$Year <- as.Date(air_revenue_quarterly$Year, "%m/%d/%Y")
+air_revenue_quarterly <- air_revenue_quarterly[,c(1:3)]
+air_revenue_quarterly <- air_revenue_quarterly %>% group_by(Symbol) %>% mutate(scaled <- scale(Revenue))
+colnames(air_revenue_quarterly)[4] <- "scaled"
+t_air <- ts(air_revenue_quarterly %>% filter(Symbol == "DAL"), frequency = 4, start = c(2015,1))
+
+# Mobility
+mobility <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/mobility.csv")
+us_mobility <- mobility %>% filter(country_region_code == "US")
+us_mobility$date <- as.Date(us_mobility$date, "%Y-%m-%d")
+us_mobility$retail_and_recreation_percent_change_from_baseline <- as.numeric(us_mobility$retail_and_recreation_percent_change_from_baseline)
+us_mobility$sub_region_1 <- as.character(us_mobility$sub_region_1)
+us_mobility$sub_region_2 <- as.character(us_mobility$sub_region_2)
+us_mobility <- us_mobility %>% mutate_if(is.numeric, ~replace(., is.na(.), 0))
+summary(us_mobility)
+state_mobility <- us_mobility %>% 
+  group_by(date) %>% 
+  mutate(work = mean(workplaces_percent_change_from_baseline), 
+                     retail = mean(retail_and_recreation_percent_change_from_baseline),
+                     transit = mean(transit_stations_percent_change_from_baseline)) %>% 
+  select(c(date,work,retail,transit))
+state_mobility <- state_mobility[1:76,]
+#write.csv(state_mobility, "state_mobility.csv")
+```
+
+```{r, echo=FALSE}
+#Load necessary packages.
+x <- c("httr", "jsonlite", "tidyverse", "dplyr","tidyr", "stringr", "lubridate","data.table", "readr","tibble", "ggplot2", "scales","RCurl")
+suppressPackageStartupMessages(lapply(x, library, character.only = TRUE))
+```
+
+```{r}
+# get the URL for the wikipedia page with all SP500 symbols
+url <- "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+# use that URL to scrape the SP500 table using rvest
+tickers <- url %>%
+  # read the HTML from the webpage
+  read_html() %>%
+  # one way to get table
+  #html_nodes(xpath='//*[@id="mw-content-text"]/div/table[1]') %>%
+  # easier way to get table
+  html_nodes(xpath = '//*[@id="constituents"]') %>% 
+  html_table()
+#create a vector of tickers
+sp500tickers <- tickers[[1]]
+sp500tickers = sp500tickers %>% mutate(Symbol = case_when(Symbol == "BRK.B" ~ "BRK-B",
+                                           Symbol == "BF.B" ~ "BF-B",
+                                            TRUE ~ as.character(Symbol)))
+
+#html_nodes(xpath = '//*[@id="constituents"]'
+sectors <- sp500tickers$`GICS Sector` %>% unique()
+Industrials_sector <- sp500tickers %>% filter(`GICS Sector` == sectors[1]) %>% select("Symbol")
+
+# get monthly stock price
+monthly_air <- read_csv("~/Dropbox/School/UCLA/Datafest 2020/stockData.csv")
+monthly_air <- monthly_air[,-1]
+monthly_air[,c(2:6)] <- sapply(monthly_air[,c(2:6)], function(x) scale(x) )
+
+# get the numbers from the report
+report_air <- read_xlsx("~/Dropbox/School/UCLA/Datafest 2020/Airline data/airline_revenue.xlsx")
+summary(report_air)
+report_air$`Net income` <- gsub(",","",report_air$`Net income`)
+report_air$Year <- gsub("^([0-9]{4})","\\1-12-31",report_air$Year)
+report_air$Year <- as.Date(report_air$Year,"%Y-%m-%d")
+revenue_list <- report_air[,c(1:3)]
+revenue_list <- revenue_list %>% group_by(Ticker) %>% mutate(scaled <- scale(Revenue))
+colnames(revenue_list)[4] <- "scaled"
+
+# lax data
+lax <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/Airline data/lax.csv")
+lax$Date <- as.Date(lax$Date, "%Y-%m-%d")
+lax <- lax %>% mutate(cargo.scaled <- scale(Cargo.Total), operation.scaled <- scale(Flight.Operations))
+lax <- lax[,c(1,4,5)]
+colnames(lax)[2:3] <- c("Cargo.Scaled", "Operation.Scaled")
+lax[,c(2,3)] <- lax[,c(2,3)] %>% lapply(function(x) round(x,2))
+#write.csv(lax, "lax_scaled.csv")
+```
+
+```{r}
+# S&P 500 by each GICS sectors
+industrial_tickers <- tq_get(Industrials_sector$Symbol, from = date)
+industrial_tickers <- industrial_tickers[,c(1,2,6)]
+industrial_scaled <- industrial_tickers %>% group_by(symbol) %>% mutate(scaled <- scale(close))
+colnames(industrial_scaled)[4] <- "scaled"
+#write.csv(industrial_tickers,"industrial_ticker.csv")
+
+
+
+# Aerospace and defence stock scaled
+aerospace_tickers <- tq_get(c("BA","GD","HWM","HII","LHX","LMT","NOC","RTX","TXT","TDG"), from = date)
+#write.csv(aerospace_tickers,"aerospace_tickers.csv")
+aerospace_scale <- aerospace_tickers %>% group_by(symbol) %>% mutate(scaled <- scale(close))
+colnames(aerospace_scale)[9] <- "scaled"
+
+
+# Airline stocks scaled
+airlines_tickers <- tq_get(c("ALK","AAL","DAL","LUV","UAL"), from = date)
+#write.csv(airlines_tickers,"airlines_tickers.csv")
+airlines_scale <- airlines_tickers %>% group_by(symbol) %>% mutate(scaled <- scale(close))
+colnames(airlines_scale)[9] <- "scaled"
+
+# Horel Resort & Cruise Lines stocks scaled
+hoteletc_tickers <- tq_get(c("CCL","HLT","MAR","NCLH","RCL"), from = date)
+#write.csv(hoteletc_tickers,"hoteletc_tickers.csv")
+hoteletc_scale <- hoteletc_tickers %>% group_by(symbol) %>% mutate(scaled <- scale(close))
+colnames(hoteletc_scale)[9] <- "scaled"
+monthly_hotel <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/hotel.csv")
+monthly_hotel <- monthly_hotel[-78,-1]
+monthly_hotel[,c(2:7)] <- sapply(monthly_hotel[,c(2:7)], function(x) scale(x) )
+
+# Restaurants stocks scaled
+restaurant_tickers <- tq_get(c("CMG","DRI","MCD","SBUX","YUM"), from = date)
+#write.csv(restaurant_tickers,"restaurant_tickers.csv")
+restaurant_scale <- restaurant_tickers %>% group_by(symbol) %>% mutate(scaled <- scale(close))
+colnames(restaurant_scale)[9] <- "scaled"
+monthly_rest <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/restaurant.csv")
+monthly_rest <- monthly_rest[-126,-1]
+monthly_rest[,c(2:7)] <- sapply(monthly_rest[,c(2:7)], function(x) scale(x) )
+
+# Railroad stocks scaled
+railroad_tickers <- tq_get(c("CSX","KSU","NSC","UNP"), from = date)
+#write.csv(railroad_tickers,"railroad_tickers.csv")
+railroad_scale <- railroad_tickers %>% group_by(symbol) %>% mutate(scaled <- scale(close))
+colnames(railroad_scale)[9] <- "scaled"
+
+# Air freight scaled
+monthly_afreight <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/airfreight.csv")
+monthly_afreight <- monthly_afreight[-126,-1]
+monthly_afreight[,c(2:6)] <- sapply(monthly_afreight[,c(2:6)], function(x) scale(x) )
+
+# Cosmetic stock scaled
+options("getSymbols.warning4.0"=FALSE)
+options("getSymbols.yahoo.warning"=FALSE)
+# Downloading Apple price using quantmod
+
+getSymbols("KAOOY", from = '2019-01-01',
+           to = "2020-05-05",warnings = FALSE,
+           auto.assign = TRUE)
+
+chart_Series(KAOOY)
+chart_Series(KAOOY['2020-02/2020-05'])
+
+# Ozone data
+la_ozone <- ozone3 %>% filter(COUNTY == "Los Angeles")
+la_ozone <- la_ozone %>% group_by(Site.Name) %>% mutate(scaled <- scale(Daily.Max.8.hour.Ozone.Concentration))
+colnames(la_ozone)[21] <- "scaled"
+west_la_ozone <- la_ozone %>% filter(Site.Name == "West Los Angeles")
+west_la_ozone <- west_la_ozone[,c(1,5)]
+
+la_pm25 <- pm25_total %>% filter(COUNTY == "Los Angeles")
+la_pm25 <- la_pm25 %>% group_by(Site.Name) %>% mutate(scaled <- scale(Daily.Mean.PM2.5.Concentration))
+colnames(la_pm25)[21] <- "scaled"
+sc_la_pm25 <- la_pm25 %>% filter(Site.Name == "Santa Clarita")
+sc_la_pm25 <- sc_la_pm25[,c(1,5,8)]
+```
+
+```{r}
+# Scaled stock change in industrial sector
+ggplot() + 
+  geom_line(aes(x = date, y = scaled, col = symbol), data = industrial_scaled) +
+  ggtitle("Scaled Closed Stock Price of Industrial Sector")
+
+# Scaled stock change in Aerospace
+ggplot() + 
+  geom_line(aes(x = date, y = scaled, col = symbol), data = aerospace_scale) +
+  ggtitle("Scaled Closed Stock Price of Aerospace companies")
+
+# Scaled stock change in Airline Companies
+ggplot() + 
+  geom_line(aes(x = date, y = scaled, col = symbol), data = airlines_scale) +
+  ggtitle("Scaled Closed Stock Price of Airline Companies")
+
+# Scaled stock change in Hotel resort & Curise Companies
+ggplot() + 
+  geom_line(aes(x = date, y = scaled, col = symbol), data = hoteletc_scale) +
+  ggtitle("Scaled Closed Stock Price of Hotel resort & Curise Companies")
+
+# Scaled stock change in Restaurant Companies
+ggplot() + 
+  geom_line(aes(x = date, y = scaled, col = symbol), data = restaurant_scale) +
+  ggtitle("Scaled Closed Stock Price of Restaurant Companies")
+
+# Scaled stock change in Railroad Companies
+ggplot() + 
+  geom_line(aes(x = date, y = scaled, col = symbol), data = railroad_scale) +
+  ggtitle("Scaled Closed Stock Price of Railroad Companies")
+
+ggplot() +
+  geom_line(aes(x = Date, y = `^GSPC`), data = monthly_air) +
+  geom_line(aes(x = Date, y = DAL), data = monthly_air,color="blue") +
+  geom_line(aes(x = Date, y = AAL), data = monthly_air,color="red") +
+  geom_line(aes(x = Date, y = UAL), data = monthly_air,color="green") +
+  geom_line(aes(x = Date, y = LUV), data = monthly_air,color="purple") 
+
+# Air quality
+ggplot() +
+  geom_line(aes(x = Year, y = scaled, col = Ticker), data = revenue_list)
+
+ggplot() +
+  geom_line(aes(x = Date, y = scaled, col = Site.Name), data = la_ozone)
+
+
+ggplot() +
+  geom_line(aes(x = Date, y = scaled, col = Site.Name), data = la_pm25)
+
+
+ggplot() +
+  geom_line(aes(x = Date, y = Daily.Max.8.hour.CO.Concentration), data = co)
+
+ggplot() +
+  geom_line(aes(x = Year, y = Revenue, col = Symbol), data = air_revenue_quarterly)
+
+boxplot(t_air[,3] ~ cycle(t_air[,3]))
+plot(decompose(t_air[,3], type = "mult"))
+
+
+state_mobility %>% ggplot() +
+  geom_line(aes(x = date, y = transit),col = "green") +
+  geom_line(aes(x = date, y = retail), col = "orange") +
+  geom_line(aes(x = date, y = work), col = "blue") 
+```
+
+# See if there was no COVID19
+```{r}
+# Airline Industry
+without_covid_stock <- monthly_air[1:120,]
+training <- ts(without_covid_stock[,-1], start = c(2010,1), end = c(2019, 12), freq = 12)
+test = ts(monthly_air[121:125,-1], start = c(2020), end = c(2020,5), freq = 12)
+GSPC = training[,1]
+DAL = training[,2]
+AAL = training[,3]
+UAL = training[,4]
+LUV = training[,5]
+
+# Hotel Industry
+without_covid_stock <- monthly_hotel[1:72,]
+training_h <- ts(without_covid_stock[,-1], start = c(2014,1), end = c(2019, 12), freq = 12)
+test_h = ts(monthly_hotel[73:77,-1], start = c(2020), end = c(2020,5), freq = 12)
+CCL = training_h[,2]
+HLT = training_h[,3]
+MAT = training_h[,4]
+NCLH = training_h[,5]
+RCL = training_h[,6]
+
+# Restaurant Industry
+without_covid_stock <- monthly_rest[1:120,]
+training_r <- ts(without_covid_stock[,-1], start = c(2010,1), end = c(2019, 12), freq = 12)
+test_r = ts(monthly_rest[121:125,-1], start = c(2020), end = c(2020,5), freq = 12)
+CMG = training_r[,2]
+DRI = training_r[,3]
+MCD = training_r[,4]
+SBUX = training_r[,5]
+YUM = training_r[,6]
+
+# Air Freight Industry
+without_covid_stock <- monthly_afreight[1:120,]
+training_f <- ts(without_covid_stock[,-1], start = c(2010,1), end = c(2019, 12), freq = 12)
+test_f = ts(monthly_afreight[121:125,-1], start = c(2020,1), end = c(2020,5), freq = 12)
+CHRW = training_f[,2]
+EXPD = training_f[,3]
+FDX = training_f[,4]
+UPS = training_f[,5]
+
+# Airline revenue quartely
+DAL_rev_train <- air_revenue_quarterly %>% filter(Symbol == "DAL")
+DAL_rev_test <- DAL_rev_train[21,]
+DAL_rev_train <- DAL_rev_train[-21,]
+DAL_rev_train <- ts(DAL_rev_train[,4], start = c(2015,1), end = c(2019,4), freq = 4)
+DAL_rev_test <- ts(DAL_rev_test[,4], start = c(2020,1), freq = 4)
+
+AAL_rev_train <- air_revenue_quarterly %>% filter(Symbol == "AAL")
+AAL_rev_test <- AAL_rev_train[21,]
+AAL_rev_train <- AAL_rev_train[-21,]
+AAL_rev_train <- ts(AAL_rev_train[,4], start = c(2015,1), end = c(2019,4), freq = 4)
+AAL_rev_test <- ts(AAL_rev_test[,4], start = c(2020,1), freq = 4)
+
+UAL_rev_train <- air_revenue_quarterly %>% filter(Symbol == "UAL")
+UAL_rev_test <- UAL_rev_train[21,]
+UAL_rev_train <- UAL_rev_train[-21,]
+UAL_rev_train <- ts(UAL_rev_train[,4], start = c(2015,1), end = c(2019,4), freq = 4)
+UAL_rev_test <- ts(UAL_rev_test[,4], start = c(2020,1), freq = 4)
+
+LUV_rev_train <- air_revenue_quarterly %>% filter(Symbol == "LUV")
+LUV_rev_test <- LUV_rev_train[21,]
+LUV_rev_train <- LUV_rev_train[-21,]
+LUV_rev_train <- ts(LUV_rev_train[,4], start = c(2015,1), end = c(2019,4), freq = 4)
+LUV_rev_test <- ts(LUV_rev_test[,4], start = c(2020,1), freq = 4)
+```
+
+```{r}
+#Regular differencing 
+reg.diff=diff(UAL, lag=1,diff=1)
+
+#Seasonal differencing 
+seas.diff=diff(UAL, lag=12,diff=1)
+
+#Regular seasonal differencing 
+seas.reg.diff=diff(reg.diff, lag=12,diff=1)
+
+acf(reg.diff,lag=25, main="reg only diff")
+acf(seas.diff,lag=25,main="seas only diff")
+acf(seas.reg.diff,lag=25,main="reg and seas diff")
+
+U.diff <- reg.diff
+
+#Regular differencing 
+reg.diff=diff(DAL, lag=1,diff=1)
+
+#Seasonal differencing 
+seas.diff=diff(DAL, lag=12,diff=1)
+
+#Regular seasonal differencing 
+seas.reg.diff=diff(reg.diff, lag=12,diff=1)
+
+acf(reg.diff,lag=25, main="reg only diff")
+acf(seas.diff,lag=25,main="seas only diff")
+acf(seas.reg.diff,lag=25,main="reg and seas diff")
+
+D.diff <- reg.diff # MA1
+
+#Regular differencing 
+reg.diff=diff(LUV, lag=1,diff=1)
+
+#Seasonal differencing 
+seas.diff=diff(LUV, lag=12,diff=1)
+
+#Regular seasonal differencing 
+seas.reg.diff=diff(reg.diff, lag=12,diff=1)
+
+acf(reg.diff,lag=25, main="reg only diff")
+acf(seas.diff,lag=25,main="seas only diff")
+acf(seas.reg.diff,lag=25,main="reg and seas diff")
+
+L.diff <- reg.diff
+
+#Regular differencing 
+reg.diff=diff(AAL, lag=1,diff=1)
+
+#Seasonal differencing 
+seas.diff=diff(AAL, lag=12,diff=1)
+
+#Regular seasonal differencing 
+seas.reg.diff=diff(reg.diff, lag=12,diff=1)
+
+acf(reg.diff,lag=25, main="reg only diff")
+acf(seas.diff,lag=25,main="seas only diff")
+acf(seas.reg.diff,lag=25,main="reg and seas diff")
+
+A.diff <- reg.diff
+```
+
+# VAR Model
+```{r, eval=FALSE}
+airline.var=VAR(cbind(DAL,AAL,UAL,LUV),p=3, type="trend")
+coef(airline.var)
+
+
+acf(resid(airline.var))
+acf(resid(airline.var)^2)
+
+
+airline.predict = predict(airline.var, n.ahead = 5)
+predict.val = ts(airline.predict$fcst$DAL[,1], start = c(2020,1), end = c(2020,5), freq = 12)
+ci.low = ts(airline.predict$fcst$DAL[,2], start = c(2020,1), end = c(2020,5), freq = 12)
+ci.high = ts(airline.predict$fcst$DAL[,3], start = c(2020,1), end = c(2020,5), freq = 12)
+ts.plot(cbind(DAL, predict.val,ci.low, ci.high, test[,2]), 
+        lty=c(1,1,3,3,1), col=c("black", "red","blue","blue","black"),
+        main="Predicted Monthly Stock Close Value of Delta Airline",
+        ylab="Stockprice scaled")
+legend("topleft", legend=c("Stock Price","Predicted","Actual","CI"), lty=c(1,1,2,2), col=c(1,2,1,4))
+```
+
+# Exponential smoothing
+```{r}
+# Airline Stock Price
+par(mfrow = c(1,1))
+es = HoltWinters(DAL)
+fitted.DAL = fitted(es)
+DAL_forecast= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(DAL,fitted.DAL[,1]), DAL_forecast, test[,2],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of Delta Airline", ylab = "Scaled Stock Price", xlim = c(2019,2020.3))
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+
+es = HoltWinters(AAL)
+fitted.AAL = fitted(es)
+AAL_forecast= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(AAL,fitted.AAL[,1]), AAL_forecast, test[,3],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of American Airline", ylab = "Scaled Stock Price")
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+
+es = HoltWinters(UAL)
+fitted.UAL = fitted(es)
+UAL_forecast= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(UAL,fitted.UAL[,1]), UAL_forecast, test[,4],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of United Airline", ylab = "Scaled Stock Price")
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+
+es = HoltWinters(LUV)
+fitted.LUV = fitted(es)
+LUV_forecast= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(LUV,fitted.LUV[,1]), LUV_forecast, test[,5],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of SouthWest Airline", ylab = "Scaled Stock Price")
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+
+#write.csv(data.frame(rbind(training[,-1],test[,-1])), "air_stock.csv")
+#write.csv(rbind(cbind(fitted.DAL[,1],fitted.AAL[,1],fitted.UAL[,1],fitted.LUV[,1]),cbind(DAL_forecast[,1],AAL_forecast[,1],UAL_forecast[,1],LUV_forecast[,1])),"predict_stock.csv")
+
+# Airline Revenue
+es = HoltWinters(DAL_rev_train)
+DAL.rev.fit = fitted(es)
+DAL.rev.forecast= predict(es, n.ahead = 1, prediction.interval = TRUE)
+ts.plot(cbind(DAL_rev_train,DAL.rev.fit[,1]),DAL.rev.forecast,DAL_rev_test,lty=c(1,1), col=c(1,2), main="Predicted Quarterly Revenue of Delta Airline", ylab = "Quarter Revenue")
+points(DAL.rev.forecast, col = "red")
+points(DAL_rev_test)
+legend("topleft", legend=c("Predicted","Actual"), lty=c(1,1), col=c(2,1))
+
+es = HoltWinters(AAL_rev_train)
+AAL.rev.fit = fitted(es)
+AAL.rev.forecast= predict(es, n.ahead = 1, prediction.interval = TRUE)
+ts.plot(cbind(AAL_rev_train,AAL.rev.fit[,1]),AAL.rev.forecast,AAL_rev_test,lty=c(1,1), col=c(1,2), main="Predicted Quarterly Revenue of American Airline", ylab = "Quarter Revenue")
+points(AAL.rev.forecast, col = "red")
+points(AAL_rev_test)
+legend("topleft", legend=c("Predicted","Actual"), lty=c(1,1), col=c(2,1))
+
+es = HoltWinters(UAL_rev_train)
+UAL.rev.fit = fitted(es)
+UAL.rev.forecast= predict(es, n.ahead = 1, prediction.interval = TRUE)
+ts.plot(cbind(UAL_rev_train,UAL.rev.fit[,1]),UAL.rev.forecast,UAL_rev_test,lty=c(1,1), col=c(1,2), main="Predicted Quarterly Revenue of United Airline", ylab = "Quarter Revenue")
+points(UAL.rev.forecast, col = "red")
+points(UAL_rev_test)
+legend("topleft", legend=c("Predicted","Actual"), lty=c(1,1), col=c(2,1))
+
+es = HoltWinters(LUV_rev_train)
+LUV.rev.fit = fitted(es)
+LUV.rev.forecast= predict(es, n.ahead = 1, prediction.interval = TRUE)
+ts.plot(cbind(LUV_rev_train,LUV.rev.fit[,1]),LUV.rev.forecast,LUV_rev_test,lty=c(1,1), col=c(1,2), main="Predicted Quarterly Revenue of SouthWest Airline", ylab = "Quarter Revenue")
+points(LUV.rev.forecast, col = "red")
+points(LUV_rev_test)
+legend("topleft", legend=c("Predicted","Actual"), lty=c(1,1), col=c(2,1))
+
+#write.csv(data.frame(rbind(cbind(LUV_rev_train,UAL_rev_train,AAL_rev_train,DAL_rev_train),cbind(LUV_rev_test,UAL_rev_test,AAL_rev_test,DAL_rev_test))),"air_revenue.csv")
+#write.csv(rbind(cbind(DAL.rev.fit[,1],AAL.rev.fit[,1],UAL.rev.fit[,1],LUV.rev.fit[,1]),cbind(DAL.rev.forecast[,1],AAL.rev.forecast[,1],UAL.rev.forecast[,1],LUV.rev.forecast[,1])),"rev_fit.csv")
+```
+
+```{r}
+# Hotel
+es = HoltWinters(CCL)
+fitted.es = fitted(es)
+LT.forecast.es= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(CCL,fitted.es[,1]), LT.forecast.es, test_h[,2],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of Carnival Corp", ylab = "Scaled Stock Price")
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+
+es = HoltWinters(HLT)
+fitted.es = fitted(es)
+LT.forecast.es= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(HLT,fitted.es[,1]), LT.forecast.es, test_h[,3],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of Hilton Worldwide Holdings Inc", ylab = "Scaled Stock Price")
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+
+es = HoltWinters(MAT)
+fitted.es = fitted(es)
+LT.forecast.es= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(MAT,fitted.es[,1]), LT.forecast.es, test_h[,4],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of Marriott Int'l", ylab = "Scaled Stock Price")
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+
+es = HoltWinters(NCLH)
+fitted.es = fitted(es)
+LT.forecast.es= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(NCLH,fitted.es[,1]), LT.forecast.es, test_h[,5],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of Norwegian Cruise Line Holdings", ylab = "Scaled Stock Price")
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+
+es = HoltWinters(RCL)
+fitted.es = fitted(es)
+LT.forecast.es= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(RCL,fitted.es[,1]), LT.forecast.es, test_h[,6],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of Royal Caribbean Cruises Ltd", ylab = "Scaled Stock Price")
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+```
+
+```{r}
+# Air Freight
+es = HoltWinters(CHRW)
+fitted.es = fitted(es)
+LT.forecast.es= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(CHRW,fitted.es[,1]), LT.forecast.es, test_f[,2],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of C. H. Robinson Worldwide", ylab = "Scaled Stock Price")
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+
+es = HoltWinters(EXPD)
+fitted.es = fitted(es)
+LT.forecast.es= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(EXPD,fitted.es[,1]), LT.forecast.es, test_f[,3],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of Expeditors", ylab = "Scaled Stock Price")
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+
+es = HoltWinters(FDX)
+fitted.es = fitted(es)
+LT.forecast.es= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(FDX,fitted.es[,1]), LT.forecast.es, test_f[,4],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of FedEx Corporation", ylab = "Scaled Stock Price")
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+
+es = HoltWinters(UPS)
+fitted.es = fitted(es)
+LT.forecast.es= predict(es, n.ahead = 5, prediction.interval = TRUE)
+ts.plot(cbind(UPS,fitted.es[,1]), LT.forecast.es, test_f[,5],lty=c(1,1,1,2,2,1), col=c(1,2,2,4,4,1), main="Predicted Monthly Stock Close Value of United Parcel Service", ylab = "Scaled Stock Price")
+legend("topleft", legend=c("Predicted","Actual","CI"), lty=c(1,1,2), col=c(2,1,4))
+```
+
+```{r}
+ar <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/air_revenue.csv")
+as <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/air_stock.csv")
+ps <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/predict_stock.csv")
+pr <- read.csv("~/Dropbox/School/UCLA/Datafest 2020/rev_fit.csv")
+
+ar$Date <- as.Date(ar$Date, "%m/%d/%Y")
+as$Date <- as.Date(as$Date, "%m/%d/%Y")
+ps$Date <- as.Date(ps$Date, "%m/%d/%Y")
+pr$Date <- as.Date(pr$Date, "%m/%d/%Y")
+
+ggplot() +
+  geom_line(aes(x = Date, y = DAL, color = "Actual"), data = as %>% filter(Date >= "2019-01-01")) +
+  geom_line(aes(x = Date, y = DAL, color = "Predicted"), data = ps %>% filter(Date >= "2019-01-01")) +
+  ylab("Scaled Stock Close Price") +
+  ggtitle("Delta Airline Difference Between Actual and Predicted Stock Price")
+
+ggplot() +
+  geom_line(aes(x = Date, y = DAL_rev, color = "Actual"), data = ar %>% filter(Date > "2019-01-01")) +
+  geom_line(aes(x = Date, y = DAL, color = "Predicted"), data = pr %>% filter(Date > "2019-01-01")) +
+  ylab("Scaled Revenue") +
+  ggtitle("Delta Airline Difference Between Actual and Predicted Revenue")
+
+ggplot() +
+  geom_line(aes(x = Date, y = AAL, color = "Actual"), data = as %>% filter(Date >= "2019-01-01")) +
+  geom_line(aes(x = Date, y = AAL, color = "Predicted"), data = ps %>% filter(Date >= "2019-01-01")) +
+  ylab("Scaled Stock Close Price") +
+  ggtitle("American Airline Difference Between Actual and Predicted Stock Price")
+
+ggplot() +
+  geom_line(aes(x = Date, y = AAL_rev, color = "Actual"), data = ar %>% filter(Date > "2019-01-01")) +
+  geom_line(aes(x = Date, y = AAL, color = "Predicted"), data = pr %>% filter(Date > "2019-01-01")) +
+  ylab("Scaled Revenue") +
+  ggtitle("American Airline Difference Between Actual and Predicted Revenue")
+
+ggplot() +
+  geom_line(aes(x = Date, y = UAL, color = "Actual"), data = as %>% filter(Date >= "2019-01-01")) +
+  geom_line(aes(x = Date, y = UAL, color = "Predicted"), data = ps %>% filter(Date >= "2019-01-01")) +
+  ylab("Scaled Stock Close Price") +
+  ggtitle("United Airline Difference Between Actual and Predicted Stock Price")
+
+ggplot() +
+  geom_line(aes(x = Date, y = UAL_rev, color = "Actual"), data = ar %>% filter(Date > "2019-01-01")) +
+  geom_line(aes(x = Date, y = UAL, color = "Predicted"), data = pr %>% filter(Date > "2019-01-01")) +
+  ylab("Scaled Revenue") +
+  ggtitle("United Airline Difference Between Actual and Predicted Revenue")
+
+ggplot() +
+  geom_line(aes(x = Date, y = LUV, color = "Actual"), data = as %>% filter(Date >= "2019-01-01")) +
+  geom_line(aes(x = Date, y = LUV, color = "Predicted"), data = ps %>% filter(Date >= "2019-01-01")) +
+  ylab("Scaled Stock Close Price") +
+  ggtitle("SouthWest Airline Difference Between Actual and Predicted Stock Price")
+
+ggplot() +
+  geom_line(aes(x = Date, y = LUV_rev, color = "Actual"), data = ar %>% filter(Date > "2019-01-01")) +
+  geom_line(aes(x = Date, y = LUV, color = "Predicted"), data = pr %>% filter(Date > "2019-01-01")) +
+  ylab("Scaled Revenue") +
+  ggtitle("SouthWest Airline Difference Between Actual and Predicted Revenue")
+
+```
